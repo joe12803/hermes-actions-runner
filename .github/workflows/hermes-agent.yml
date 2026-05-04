@@ -1,0 +1,68 @@
+name: Hermes Agent Runner
+on:
+  workflow_dispatch:
+    inputs:
+      query:
+        description: 'The task or query for Hermes'
+        required: true
+        default: 'Hello! Check the system status and report back.'
+  schedule:
+    - cron: '0 0 * * *' # Daily at midnight
+
+jobs:
+  run-agent:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Hermes Agent
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Configure Hermes
+        run: |
+          mkdir -p ~/.hermes
+          # Create a basic config that uses environment variables for secrets
+          cat <<EOF > ~/.hermes/config.yaml
+          model:
+            default: ${DEFAULT_MODEL:-anthropic/claude-3-5-sonnet}
+            provider: ${DEFAULT_PROVIDER:-anthropic}
+          approvals:
+            mode: off
+          terminal:
+            backend: local
+          EOF
+          
+          # Optional: Restore persistent memory or skills from repo if needed
+          if [ -d ".hermes-data/skills" ]; then
+            cp -r .hermes-data/skills ~/.hermes/
+          fi
+
+      - name: Run Hermes Task
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_MODEL: ${{ vars.DEFAULT_MODEL }}
+          DEFAULT_PROVIDER: ${{ vars.DEFAULT_PROVIDER }}
+        run: |
+          hermes chat -q "${{ github.event.inputs.query || 'Daily maintenance task' }}"
+
+      - name: Sync Results (Optional)
+        if: always()
+        run: |
+          # Example: save session logs back to repo or a branch
+          mkdir -p .hermes-data/sessions
+          cp -r ~/.hermes/sessions/* .hermes-data/sessions/ || true
+          git config --global user.name "hermes-agent[bot]"
+          git config --global user.email "hermes-agent[bot]@users.noreply.github.com"
+          git add .hermes-data
+          git commit -m "docs: archive hermes session results" || echo "No changes to commit"
+          git push origin main || echo "Push failed (maybe no changes)"
