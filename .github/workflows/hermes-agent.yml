@@ -19,9 +19,13 @@ on:
 jobs:
   run-agent:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -39,6 +43,14 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
+      - name: Restore Data from Repository
+        run: |
+          mkdir -p ~/.hermes
+          if [ -d ".hermes-data" ]; then
+            echo "Restoring sessions, memory, and skills from repository..."
+            cp -r .hermes-data/* ~/.hermes/ || true
+          fi
+
       - name: Configure Hermes
         env:
           CUSTOM_API_KEY: ${{ secrets.CUSTOM_API_KEY }}
@@ -47,8 +59,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_ALLOWED_USER: ${{ secrets.TELEGRAM_ALLOWED_USER }}
         run: |
-          mkdir -p ~/.hermes
-          # Disable pairing globally and for gateway to allow direct access
+          # Create config while preserving existing keys if any
           cat <<EOF > ~/.hermes/config.yaml
           model:
             default: gemini-3-flash
@@ -94,6 +105,31 @@ jobs:
           HERMES_PAIRING_ENABLED=false
           EOF
 
+      - name: Start Background Auto-Sync
+        run: |
+          cat <<'EOF' > sync.sh
+          while true; do
+            sleep 600 # Sync every 10 minutes
+            echo "Auto-syncing data to repository..."
+            mkdir -p .hermes-data
+            cp -r ~/.hermes/sessions .hermes-data/ || true
+            cp -r ~/.hermes/memory .hermes-data/ || true
+            cp -r ~/.hermes/skills .hermes-data/ || true
+            
+            git config --global user.name "hermes-agent[bot]"
+            git config --global user.email "hermes-agent[bot]@users.noreply.github.com"
+            git add .hermes-data
+            if ! git diff --cached --quiet; then
+              git commit -m "chore: auto-sync hermes data [skip ci]"
+              git push origin main || echo "Push failed, will retry later"
+            else
+              echo "No changes to sync."
+            fi
+          done
+          EOF
+          chmod +x sync.sh
+          ./sync.sh &
+
       - name: Start Web UI and Tunnel
         if: github.event.inputs.run_webui == 'true'
         run: |
@@ -104,7 +140,27 @@ jobs:
           cloudflared tunnel --url http://localhost:3001 &
           sleep 15
 
-      - name: Run Hermes Gateway
-        if: github.event.inputs.run_gateway == 'true'
+      - name: Run Hermes Agent
         run: |
-          hermes gateway run
+          if [ "${{ github.event.inputs.run_gateway }}" == "true" ]; then
+            hermes gateway run
+          elif [ "${{ github.event.inputs.query }}" != "" ]; then
+            hermes chat -q "${{ github.event.inputs.query }}"
+          else
+            echo "No task specified. Running doctor..."
+            hermes doctor
+          fi
+
+      - name: Final Data Sync
+        if: always()
+        run: |
+          echo "Performing final data sync..."
+          mkdir -p .hermes-data
+          cp -r ~/.hermes/sessions .hermes-data/ || true
+          cp -r ~/.hermes/memory .hermes-data/ || true
+          cp -r ~/.hermes/skills .hermes-data/ || true
+          git config --global user.name "hermes-agent[bot]"
+          git config --global user.email "hermes-agent[bot]@users.noreply.github.com"
+          git add .hermes-data
+          git commit -m "docs: archive final hermes session results" || echo "No changes to commit"
+          git push origin main || echo "Final push failed"
