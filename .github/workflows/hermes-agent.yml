@@ -10,7 +10,7 @@ on:
         type: boolean
         default: false
       run_webui:
-        description: 'Start CloudCLI Web UI with Cloudflare Tunnel'
+        description: 'Start Hermes WebUI with Cloudflare Tunnel'
         type: boolean
         default: false
   schedule:
@@ -32,12 +32,6 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Set up Node.js (for Web UI)
-        if: github.event.inputs.run_webui == 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
       - name: Install Hermes Agent
         run: |
           curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
@@ -47,7 +41,6 @@ jobs:
         run: |
           mkdir -p ~/.hermes
           if [ -d ".hermes-data" ]; then
-            echo "Restoring sessions, memory, and skills from repository..."
             cp -r .hermes-data/* ~/.hermes/ || true
           fi
 
@@ -59,7 +52,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_ALLOWED_USER: ${{ secrets.TELEGRAM_ALLOWED_USER }}
         run: |
-          # Create config while preserving existing keys if any
+          mkdir -p ~/.hermes
           cat <<EOF > ~/.hermes/config.yaml
           model:
             default: gemini-3-flash
@@ -109,52 +102,59 @@ jobs:
         run: |
           cat <<'EOF' > sync.sh
           while true; do
-            sleep 600 # Sync every 10 minutes
-            echo "Auto-syncing data to repository..."
+            sleep 600
             mkdir -p .hermes-data
             cp -r ~/.hermes/sessions .hermes-data/ || true
             cp -r ~/.hermes/memory .hermes-data/ || true
             cp -r ~/.hermes/skills .hermes-data/ || true
-            
             git config --global user.name "hermes-agent[bot]"
             git config --global user.email "hermes-agent[bot]@users.noreply.github.com"
             git add .hermes-data
             if ! git diff --cached --quiet; then
               git commit -m "chore: auto-sync hermes data [skip ci]"
-              git push origin main || echo "Push failed, will retry later"
-            else
-              echo "No changes to sync."
+              git push origin main || echo "Push failed"
             fi
           done
           EOF
           chmod +x sync.sh
           ./sync.sh &
 
-      - name: Start Web UI and Tunnel
+      - name: Setup and Run Hermes WebUI
         if: github.event.inputs.run_webui == 'true'
         run: |
-          npm install -g @cloudcli-ai/cloudcli
+          # Install WebUI dependencies
+          git clone --depth 1 https://github.com/nesquena/hermes-webui ~/hermes-webui
+          cd ~/hermes-webui
+          pip install -r requirements.txt
+          
+          # Install Cloudflared
           curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
           sudo dpkg -i cloudflared.deb
-          cloudcli start --port 3001 &
-          cloudflared tunnel --url http://localhost:3001 &
+          
+          # Start WebUI in background
+          python3 server.py --port 8080 &
+          
+          # Start Cloudflare Tunnel
+          cloudflared tunnel --url http://localhost:8080 &
           sleep 15
 
       - name: Run Hermes Agent
         run: |
           if [ "${{ github.event.inputs.run_gateway }}" == "true" ]; then
             hermes gateway run
+          elif [ "${{ github.event.inputs.run_webui }}" == "true" ]; then
+            # Keep the action alive if WebUI is running
+            echo "WebUI is running. Action will remain active for 6 hours or until cancelled."
+            sleep 21600
           elif [ "${{ github.event.inputs.query }}" != "" ]; then
             hermes chat -q "${{ github.event.inputs.query }}"
           else
-            echo "No task specified. Running doctor..."
             hermes doctor
           fi
 
       - name: Final Data Sync
         if: always()
         run: |
-          echo "Performing final data sync..."
           mkdir -p .hermes-data
           cp -r ~/.hermes/sessions .hermes-data/ || true
           cp -r ~/.hermes/memory .hermes-data/ || true
