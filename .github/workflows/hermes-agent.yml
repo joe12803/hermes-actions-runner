@@ -13,9 +13,6 @@ on:
         description: 'Start CloudCLI Web UI with Cloudflare Tunnel'
         type: boolean
         default: false
-      pairing_command:
-        description: 'Command to run (e.g. /approve pairing_code)'
-        required: false
   schedule:
     - cron: '0 0 * * *'
 
@@ -51,6 +48,7 @@ jobs:
           TELEGRAM_ALLOWED_USER: ${{ secrets.TELEGRAM_ALLOWED_USER }}
         run: |
           mkdir -p ~/.hermes
+          # Disable pairing globally and for gateway to allow direct access
           cat <<EOF > ~/.hermes/config.yaml
           model:
             default: gemini-3-flash
@@ -63,6 +61,7 @@ jobs:
           
           gateway:
             allow_all_users: true
+            pairing_enabled: false
             platforms:
               feishu:
                 enabled: ${FEISHU_APP_ID:+true}
@@ -72,6 +71,9 @@ jobs:
                 enabled: ${TELEGRAM_BOT_TOKEN:+true}
                 token: "${TELEGRAM_BOT_TOKEN}"
                 allowed_users: ["${TELEGRAM_ALLOWED_USER}"]
+          
+          security:
+            pairing_enabled: false
           
           approvals:
             mode: off
@@ -89,13 +91,8 @@ jobs:
           TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
           TELEGRAM_ALLOWED_USERS=${TELEGRAM_ALLOWED_USER}
           GATEWAY_ALLOW_ALL_USERS=true
+          HERMES_PAIRING_ENABLED=false
           EOF
-
-      - name: Pairing Approval
-        if: github.event.inputs.pairing_command != ''
-        run: |
-          # The command should be something like: hermes pairing approve feishu 23BKDLWV
-          ${{ github.event.inputs.pairing_command }}
 
       - name: Start Web UI and Tunnel
         if: github.event.inputs.run_webui == 'true'
