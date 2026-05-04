@@ -13,6 +13,9 @@ on:
         description: 'Start CloudCLI Web UI with Cloudflare Tunnel'
         type: boolean
         default: false
+      pairing_command:
+        description: 'Command to run (e.g. /approve pairing_code)'
+        required: false
   schedule:
     - cron: '0 0 * * *'
 
@@ -39,17 +42,6 @@ jobs:
           curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash
           echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Install Cloudflared
-        if: github.event.inputs.run_webui == 'true'
-        run: |
-          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-          sudo dpkg -i cloudflared.deb
-
-      - name: Install CloudCLI (Web UI)
-        if: github.event.inputs.run_webui == 'true'
-        run: |
-          npm install -g @cloudcli-ai/cloudcli
-
       - name: Configure Hermes
         env:
           CUSTOM_API_KEY: ${{ secrets.CUSTOM_API_KEY }}
@@ -70,7 +62,7 @@ jobs:
               api_key: "${CUSTOM_API_KEY}"
           
           gateway:
-            allow_all_users: false
+            allow_all_users: true
             platforms:
               feishu:
                 enabled: ${FEISHU_APP_ID:+true}
@@ -88,7 +80,6 @@ jobs:
             backend: local
           EOF
           
-          # Populate .env for redundant loading
           cat <<EOF > ~/.hermes/.env
           OPENCLAW_API_KEY=${CUSTOM_API_KEY}
           FEISHU_ENABLED=${FEISHU_APP_ID:+true}
@@ -97,14 +88,21 @@ jobs:
           TELEGRAM_ENABLED=${TELEGRAM_BOT_TOKEN:+true}
           TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
           TELEGRAM_ALLOWED_USERS=${TELEGRAM_ALLOWED_USER}
+          GATEWAY_ALLOW_ALL_USERS=true
           EOF
-          
-          echo "Configuration complete."
-          hermes doctor || true
+
+      - name: Pairing Approval
+        if: github.event.inputs.pairing_command != ''
+        run: |
+          # The command should be something like: hermes pairing approve feishu 23BKDLWV
+          ${{ github.event.inputs.pairing_command }}
 
       - name: Start Web UI and Tunnel
         if: github.event.inputs.run_webui == 'true'
         run: |
+          npm install -g @cloudcli-ai/cloudcli
+          curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared.deb
           cloudcli start --port 3001 &
           cloudflared tunnel --url http://localhost:3001 &
           sleep 15
@@ -112,23 +110,4 @@ jobs:
       - name: Run Hermes Gateway
         if: github.event.inputs.run_gateway == 'true'
         run: |
-          hermes gateway status || true
           hermes gateway run
-
-      - name: Run Single Query
-        if: github.event.inputs.query != '' && github.event.inputs.run_gateway != 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          hermes chat -q "${{ github.event.inputs.query }}"
-
-      - name: Sync Results (Optional)
-        if: always() && github.event.inputs.run_gateway != 'true'
-        run: |
-          mkdir -p .hermes-data/sessions
-          cp -r ~/.hermes/sessions/* .hermes-data/sessions/ || true
-          git config --global user.name "hermes-agent[bot]"
-          git config --global user.email "hermes-agent[bot]@users.noreply.github.com"
-          git add .hermes-data
-          git commit -m "docs: archive hermes session results" || echo "No changes to commit"
-          git push origin main || echo "Push failed"
