@@ -57,13 +57,15 @@ jobs:
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
         run: |
           mkdir -p ~/.hermes
+          # Fix custom_providers to be a list
+          # Set GATEWAY_ALLOW_ALL_USERS to bypass allowlist
           cat <<EOF > ~/.hermes/config.yaml
           model:
             default: gemini-3-flash
             provider: openclaw
           
           custom_providers:
-            openclaw:
+            - name: openclaw
               base_url: https://openclaw.994938.xyz/v1
               api_key: "${CUSTOM_API_KEY}"
           
@@ -80,21 +82,24 @@ jobs:
           terminal:
             backend: local
           EOF
+          
+          # Use .env for critical gateway flags
+          echo "GATEWAY_ALLOW_ALL_USERS=true" > ~/.hermes/.env
+          echo "FEISHU_APP_ID=${FEISHU_APP_ID}" >> ~/.hermes/.env
+          echo "FEISHU_APP_SECRET=${FEISHU_APP_SECRET}" >> ~/.hermes/.env
 
       - name: Start Web UI and Tunnel
         if: github.event.inputs.run_webui == 'true'
         run: |
-          # Start CloudCLI in background
           cloudcli start --port 3001 &
-          # Start Cloudflare Tunnel
           cloudflared tunnel --url http://localhost:3001 &
           sleep 10
-          # The tunnel URL will be in the logs
 
       - name: Run Hermes Gateway
         if: github.event.inputs.run_gateway == 'true'
         run: |
-          # Run gateway in foreground (it will block until the job times out or is cancelled)
+          # Use env to ensure platforms are picked up
+          export GATEWAY_ALLOW_ALL_USERS=true
           hermes gateway run
 
       - name: Run Single Query
