@@ -6,7 +6,7 @@ on:
         description: 'The task or query for Hermes'
         required: false
       run_gateway:
-        description: 'Run as Feishu Gateway'
+        description: 'Run as Gateway (Feishu/Telegram)'
         type: boolean
         default: false
       run_webui:
@@ -55,9 +55,10 @@ jobs:
           CUSTOM_API_KEY: ${{ secrets.CUSTOM_API_KEY }}
           FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALLOWED_USER: ${{ secrets.TELEGRAM_ALLOWED_USER }}
         run: |
           mkdir -p ~/.hermes
-          # Detailed config for gateway and model
           cat <<EOF > ~/.hermes/config.yaml
           model:
             default: gemini-3-flash
@@ -69,12 +70,16 @@ jobs:
               api_key: "${CUSTOM_API_KEY}"
           
           gateway:
-            allow_all_users: true
+            allow_all_users: false
             platforms:
               feishu:
-                enabled: true
+                enabled: ${FEISHU_APP_ID:+true}
                 app_id: "${FEISHU_APP_ID}"
                 app_secret: "${FEISHU_APP_SECRET}"
+              telegram:
+                enabled: ${TELEGRAM_BOT_TOKEN:+true}
+                token: "${TELEGRAM_BOT_TOKEN}"
+                allowed_users: ["${TELEGRAM_ALLOWED_USER}"]
           
           approvals:
             mode: off
@@ -83,16 +88,18 @@ jobs:
             backend: local
           EOF
           
-          # Use .env as a secondary source (often more reliable for platforms)
+          # Populate .env for redundant loading
           cat <<EOF > ~/.hermes/.env
-          FEISHU_ENABLED=true
+          OPENCLAW_API_KEY=${CUSTOM_API_KEY}
+          FEISHU_ENABLED=${FEISHU_APP_ID:+true}
           FEISHU_APP_ID=${FEISHU_APP_ID}
           FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
-          GATEWAY_ALLOW_ALL_USERS=true
-          OPENCLAW_API_KEY=${CUSTOM_API_KEY}
+          TELEGRAM_ENABLED=${TELEGRAM_BOT_TOKEN:+true}
+          TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+          TELEGRAM_ALLOWED_USERS=${TELEGRAM_ALLOWED_USER}
           EOF
           
-          echo "Configuration complete. Checking with hermes doctor..."
+          echo "Configuration complete."
           hermes doctor || true
 
       - name: Start Web UI and Tunnel
@@ -105,7 +112,6 @@ jobs:
       - name: Run Hermes Gateway
         if: github.event.inputs.run_gateway == 'true'
         run: |
-          # Double check platforms
           hermes gateway status || true
           hermes gateway run
 
