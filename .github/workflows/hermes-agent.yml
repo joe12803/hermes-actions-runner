@@ -57,8 +57,7 @@ jobs:
           FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
         run: |
           mkdir -p ~/.hermes
-          # Fix custom_providers to be a list
-          # Set GATEWAY_ALLOW_ALL_USERS to bypass allowlist
+          # Detailed config for gateway and model
           cat <<EOF > ~/.hermes/config.yaml
           model:
             default: gemini-3-flash
@@ -70,6 +69,7 @@ jobs:
               api_key: "${CUSTOM_API_KEY}"
           
           gateway:
+            allow_all_users: true
             platforms:
               feishu:
                 enabled: true
@@ -83,23 +83,30 @@ jobs:
             backend: local
           EOF
           
-          # Use .env for critical gateway flags
-          echo "GATEWAY_ALLOW_ALL_USERS=true" > ~/.hermes/.env
-          echo "FEISHU_APP_ID=${FEISHU_APP_ID}" >> ~/.hermes/.env
-          echo "FEISHU_APP_SECRET=${FEISHU_APP_SECRET}" >> ~/.hermes/.env
+          # Use .env as a secondary source (often more reliable for platforms)
+          cat <<EOF > ~/.hermes/.env
+          FEISHU_ENABLED=true
+          FEISHU_APP_ID=${FEISHU_APP_ID}
+          FEISHU_APP_SECRET=${FEISHU_APP_SECRET}
+          GATEWAY_ALLOW_ALL_USERS=true
+          OPENCLAW_API_KEY=${CUSTOM_API_KEY}
+          EOF
+          
+          echo "Configuration complete. Checking with hermes doctor..."
+          hermes doctor || true
 
       - name: Start Web UI and Tunnel
         if: github.event.inputs.run_webui == 'true'
         run: |
           cloudcli start --port 3001 &
           cloudflared tunnel --url http://localhost:3001 &
-          sleep 10
+          sleep 15
 
       - name: Run Hermes Gateway
         if: github.event.inputs.run_gateway == 'true'
         run: |
-          # Use env to ensure platforms are picked up
-          export GATEWAY_ALLOW_ALL_USERS=true
+          # Double check platforms
+          hermes gateway status || true
           hermes gateway run
 
       - name: Run Single Query
